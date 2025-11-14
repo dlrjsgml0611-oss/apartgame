@@ -1,6 +1,7 @@
 // 부동산 정보 타입
 export interface PropertyInput {
   address: string;
+  buildYear: number; // 건축년도
   exclusiveArea: number; // 전용면적 (제곱미터)
   pyeong?: number; // 평형 (자동 계산)
 }

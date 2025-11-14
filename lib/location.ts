@@ -2,7 +2,30 @@ import { LocationInfo, RealEstateTransaction } from '@/types';
 import axios from 'axios';
 
 const KAKAO_API_KEY = process.env.KAKAO_API_KEY || '';
-const PUBLIC_DATA_API_KEY = process.env.PUBLIC_DATA_API_KEY || '';
+const PUBLIC_DATA_API_KEY = decodeApiKey(process.env.PUBLIC_DATA_API_KEY);
+const PUBLIC_DATA_API_BASE =
+  'https://apis.data.go.kr/1613000/RTMSDataSvcAptTrade';
+const RECENT_MONTHS_TO_FETCH = 6;
+const MAX_TRANSACTION_RESULTS = 12;
+
+type Coordinates = { lat: number; lng: number };
+interface RegionInfo {
+  sigunguCode?: string;
+  dong?: string;
+  bcode?: string;
+}
+
+function decodeApiKey(key?: string | null) {
+  if (!key) {
+    return '';
+  }
+
+  try {
+    return decodeURIComponent(key);
+  } catch {
+    return key;
+  }
+}
 
 /**
  * 카카오맵 API를 사용하여 주소를 좌표로 변환
@@ -201,7 +224,9 @@ async function searchNearbyParks(lat: number, lng: number) {
  */
 async function getRealEstateTransactions(
   address: string,
-  exclusiveArea: number
+  exclusiveArea: number,
+  coordinates?: Coordinates,
+  regionInfoOverride?: RegionInfo
 ): Promise<RealEstateTransaction[]> {
   if (!PUBLIC_DATA_API_KEY) {
     console.warn('공공데이터포털 API 키가 설정되지 않았습니다.');
@@ -209,41 +234,141 @@ async function getRealEstateTransactions(
   }
 
   try {
-    // 주소에서 법정동코드와 지역 정보 추출
-    const { sigunguCode, dong } = extractRegionInfo(address);
+    const regionInfo = regionInfoOverride ?? (await resolveRegionInfo(address, coordinates));
+    const { sigunguCode, dong } = regionInfo;
 
-    if (!sigunguCode || !dong) {
+    if (!sigunguCode) {
       console.warn('주소에서 지역 정보를 추출할 수 없습니다:', address);
       return [];
     }
 
-    // 최근 6개월 데이터 조회
-    const today = new Date();
-    const dealYmd = `${today.getFullYear()}${String(today.getMonth() + 1).padStart(2, '0')}`;
+    const recentDealMonths = buildRecentDealMonths(RECENT_MONTHS_TO_FETCH);
+    const transactions: RealEstateTransaction[] = [];
+    const deduplicationKey = new Set<string>();
 
-    const response = await axios.get(
-      'http://openapi.molit.go.kr/OpenAPI_ToolInstallPackage/service/rest/RTMSOBJSvc/getRTMSDataSvcAptTradeDev',
-      {
-        params: {
-          serviceKey: PUBLIC_DATA_API_KEY,
-          LAWD_CD: sigunguCode,
-          DEAL_YMD: dealYmd,
-          numOfRows: 100,
-        },
+    for (const dealYmd of recentDealMonths) {
+      try {
+        const response = await axios.get(`${PUBLIC_DATA_API_BASE}/getRTMSDataSvcAptTrade`, {
+          params: {
+            type: 'json',
+            serviceKey: PUBLIC_DATA_API_KEY,
+            LAWD_CD: sigunguCode,
+            DEAL_YMD: dealYmd,
+            numOfRows: 100,
+            pageNo: 1,
+          },
+        });
+
+        //console.dir(response.data, { depth: null });
+
+        const data = response.data;
+
+        // -----------------------------------------
+        // 🔥 1) JSON 형태인지 검사
+        // -----------------------------------------
+       // 1) JSON 응답일 경우
+        if (typeof data === 'object' && data?.response?.body?.items?.item) {
+          const parsedList = parseTransactionsFromJson(
+            data.response.body.items.item,
+            { exclusiveArea }
+          );
+
+          for (const tx of parsedList) {
+            const key = `${tx.apartmentName}-${tx.dealYear}-${tx.dealMonth}-${tx.dealDay}-${tx.exclusiveArea}-${tx.floor}`;
+            if (!deduplicationKey.has(key)) {
+              deduplicationKey.add(key);
+              transactions.push(tx);
+            }
+          }
+
+          continue; // 이번 Month 처리 끝
+        }
+
+        // -----------------------------------------
+        // 🔥 2) 그렇지 않으면 XML 파싱으로 처리
+        // -----------------------------------------
+        const xml = typeof data === 'string' ? data : '';
+
+        if (!xml) continue;
+
+        const resultCodeMatch = xml.match(/<resultCode>(.*?)<\/resultCode>/);
+        if (resultCodeMatch && resultCodeMatch[1] !== '000') {
+          const resultMsgMatch = xml.match(/<resultMsg>(.*?)<\/resultMsg>/);
+          console.warn(
+            `실거래가 API 오류 (${resultCodeMatch[1]}): ${resultMsgMatch ? resultMsgMatch[1] : '알 수 없는 오류'}`
+          );
+          continue;
+        }
+
+        const parsed = parseTransactionsFromXml(xml, { exclusiveArea, dong });
+
+        for (const tx of parsed) {
+          const key = `${tx.apartmentName}-${tx.dealYear}-${tx.dealMonth}-${tx.dealDay}-${tx.exclusiveArea}-${tx.floor}`;
+          if (!deduplicationKey.has(key)) {
+            deduplicationKey.add(key);
+            transactions.push(tx);
+          }
+        }
+      } catch (error) {
+        console.error(`실거래가 API 호출 실패 (${dealYmd}):`, error);
       }
-    );
+    }
 
-    // XML 파싱 필요 - 실제 구현에서는 xml2js 라이브러리 사용
-    // 여기서는 간단한 예시로 빈 배열 반환
-    console.log('실거래가 API 응답:', response.data);
-
-    // 실제로는 XML을 파싱하여 RealEstateTransaction[] 형태로 반환
-    return [];
+    return transactions
+      .sort((a, b) => {
+        const aDate = new Date(a.dealYear, a.dealMonth - 1, a.dealDay).getTime();
+        const bDate = new Date(b.dealYear, b.dealMonth - 1, b.dealDay).getTime();
+        return bDate - aDate;
+      })
+      .slice(0, MAX_TRANSACTION_RESULTS);
   } catch (error) {
     console.error('실거래가 조회 오류:', error);
     return [];
   }
 }
+
+
+
+function parseTransactionsFromJson(
+  items: any[] | any,
+  opts: { exclusiveArea?: number }
+): RealEstateTransaction[] {
+  if (!items) return [];
+
+  // API는 item 이 하나일 경우 object로 반환되어 배열이 아닐 수 있음
+  const list = Array.isArray(items) ? items : [items];
+
+  const result: RealEstateTransaction[] = [];
+
+  for (const item of list) {
+    const exclusive = Number(item.excluUseAr);
+
+    // 전용면적 필터가 있을 경우
+    if (
+      typeof opts.exclusiveArea === 'number' &&
+      Math.abs(exclusive - opts.exclusiveArea) > 1
+    ) {
+      continue;
+    }
+
+    const dealAmount = Number(item.dealAmount?.replace(/,/g, '')) || 0;
+
+    result.push({
+      dealAmount, // 만원 단위 유지
+      dealYear: Number(item.dealYear),
+      dealMonth: Number(item.dealMonth),
+      dealDay: Number(item.dealDay),
+      exclusiveArea: exclusive,
+      floor: Number(item.floor),
+      buildYear: Number(item.buildYear),
+      apartmentName: String(item.aptNm ?? '').trim(),
+    });
+  }
+
+  return result;
+}
+
+
 
 /**
  * 주소 기반으로 종합 입지 정보를 수집
@@ -256,6 +381,7 @@ export async function getLocationInfo(
     // 1. 주소를 좌표로 변환
     console.log('주소를 좌표로 변환 중...', address);
     const coordinates = await getCoordinatesFromAddress(address);
+    const regionInfo = await resolveRegionInfo(address, coordinates);
 
     // 2. 병렬로 주변 시설 정보 수집
     console.log('주변 시설 정보 수집 중...');
@@ -265,11 +391,12 @@ export async function getLocationInfo(
       searchNearbyHospitals(coordinates.lat, coordinates.lng),
       searchNearbyMarkets(coordinates.lat, coordinates.lng),
       searchNearbyParks(coordinates.lat, coordinates.lng),
-      getRealEstateTransactions(address, exclusiveArea),
+      getRealEstateTransactions(address, exclusiveArea, coordinates, regionInfo),
     ]);
 
     // 3. 지역 정보 추출
     const district = extractDistrict(address);
+    //const developmentPlans = await getDevelopmentPlans(district, regionInfo);
 
     return {
       address,
@@ -283,7 +410,7 @@ export async function getLocationInfo(
         parks: parks.length > 0 ? parks : undefined,
       },
       realEstateTransactions: transactions.length > 0 ? transactions : undefined,
-      developmentPlans: await getDevelopmentPlans(district),
+      //developmentPlans: developmentPlans.length > 0 ? developmentPlans : undefined,
     };
   } catch (error) {
     console.error('입지 정보 수집 오류:', error);
@@ -352,37 +479,67 @@ function determineSchoolType(schoolName: string): string {
 }
 
 /**
+ * 주소에서 법정동코드를 추출하거나, Kakao 좌표→법정동 API로 보정
+ */
+async function resolveRegionInfo(
+  address: string,
+  coordinates?: Coordinates
+): Promise<RegionInfo> {
+  const regionFromAddress = extractRegionInfo(address);
+
+  // 이미 시군구 코드와 동을 모두 추출했다면 그대로 사용
+  if (regionFromAddress.sigunguCode && regionFromAddress.dong) {
+    return regionFromAddress;
+  }
+
+  if (!KAKAO_API_KEY) {
+    return regionFromAddress;
+  }
+
+  try {
+    const resolvedCoordinates = coordinates ?? (await getCoordinatesFromAddress(address));
+    const response = await axios.get(
+      'https://dapi.kakao.com/v2/local/geo/coord2regioncode.json',
+      {
+        headers: {
+          Authorization: `KakaoAK ${KAKAO_API_KEY}`,
+        },
+        params: {
+          x: resolvedCoordinates.lng,
+          y: resolvedCoordinates.lat,
+          input_coord: 'WGS84',
+        },
+      }
+    );
+
+    const documents = response.data?.documents || [];
+    const legalRegion =
+      documents.find((doc: any) => doc.region_type === 'H') ??
+      documents.find((doc: any) => doc.region_type === 'B') ??
+      documents[0];
+
+    if (legalRegion?.code) {
+      return {
+        sigunguCode: regionFromAddress.sigunguCode || legalRegion.code.slice(0, 5),
+        dong: regionFromAddress.dong || legalRegion.region_3depth_name || legalRegion.region_2depth_name,
+        bcode: regionFromAddress.bcode || legalRegion.code,
+      };
+    }
+  } catch (error) {
+    console.error('카카오 법정동 코드 조회 오류:', error);
+  }
+
+  return regionFromAddress;
+}
+
+/**
  * 주소에서 법정동코드 추출 (공공데이터 API용)
  */
-function extractRegionInfo(address: string): { sigunguCode?: string; dong?: string } {
+function extractRegionInfo(address: string): RegionInfo {
   // 실제로는 행정구역코드 DB나 API를 사용해야 합니다
   // 여기서는 주요 지역만 하드코딩
   const regionCodes: { [key: string]: string } = {
-    '강남구': '11680',
-    '서초구': '11650',
-    '송파구': '11710',
-    '강동구': '11740',
-    '마포구': '11440',
-    '용산구': '11170',
-    '성동구': '11200',
-    '광진구': '11215',
-    '동대문구': '11230',
-    '중랑구': '11260',
-    '성북구': '11290',
-    '강북구': '11305',
-    '도봉구': '11320',
-    '노원구': '11350',
-    '은평구': '11380',
-    '서대문구': '11410',
-    '종로구': '11110',
-    '중구': '11140',
-    '영등포구': '11560',
-    '동작구': '11590',
-    '관악구': '11620',
-    '구로구': '11530',
-    '금천구': '11545',
-    '양천구': '11470',
-    '강서구': '11500',
+ 
   };
 
   for (const [gu, code] of Object.entries(regionCodes)) {
@@ -399,18 +556,202 @@ function extractRegionInfo(address: string): { sigunguCode?: string; dong?: stri
   return {};
 }
 
-/**
- * 개발 계획 정보 조회 (모의 데이터)
- */
-async function getDevelopmentPlans(district: string): Promise<string[]> {
-  // 실제로는 국토교통부 도시계획 API를 사용해야 합니다
-  // 현재는 주요 지역의 알려진 개발 계획만 반환
-  const plans: { [key: string]: string[] } = {
-    '서울특별시 강남구': ['GTX-C 노선 개통 예정 (2027년)', '삼성동 현대차 GBC 개발'],
-    '서울특별시 서초구': ['강남순환도시고속도로 개통 예정'],
-    '서울특별시 송파구': ['잠실 운동장 재개발 추진'],
-    '서울특별시 마포구': ['마포구 도시재생 뉴딜사업 추진'],
-  };
+interface TransactionParseOptions {
+  exclusiveArea: number;
+  dong?: string;
+}
 
-  return plans[district] || [];
+function buildRecentDealMonths(monthCount: number): string[] {
+  const months: string[] = [];
+  const base = new Date();
+
+  for (let i = 0; i < monthCount; i++) {
+    const cursor = new Date(base.getFullYear(), base.getMonth() - i, 1);
+    months.push(`${cursor.getFullYear()}${String(cursor.getMonth() + 1).padStart(2, '0')}`);
+  }
+
+  return months;
+}
+
+function parseTransactionsFromXml(xml: string, options: TransactionParseOptions): RealEstateTransaction[] {
+  const items: RealEstateTransaction[] = [];
+  const itemRegex = /<item>([\s\S]*?)<\/item>/g;
+  const normalizedDong = normalizeHangul(options.dong);
+  const areaTolerance = options.exclusiveArea > 0 ? Math.max(3, options.exclusiveArea * 0.08) : 0;
+
+  let match: RegExpExecArray | null;
+  while ((match = itemRegex.exec(xml)) !== null) {
+    const rawItem = match[1];
+    const dongValue = normalizeHangul(extractTagValue(rawItem, 'umdNm'));
+    if (!isDongSimilar(normalizedDong, dongValue)) {
+      continue;
+    }
+
+    const areaValueRaw = extractTagValue(rawItem, 'excluUseAr');
+    const areaValue = areaValueRaw ? parseFloat(areaValueRaw) : 0;
+
+    if (!areaValue) {
+      continue;
+    }
+
+    if (options.exclusiveArea > 0 && Math.abs(areaValue - options.exclusiveArea) > areaTolerance) {
+      continue;
+    }
+
+    const dealAmountRaw = extractTagValue(rawItem, 'dealAmount');
+    const dealYear = Number(extractTagValue(rawItem, 'dealYear') || 0);
+    const dealMonth = Number(extractTagValue(rawItem, 'dealMonth') || 0);
+    const dealDay = Number(extractTagValue(rawItem, 'dealDay') || 1);
+
+    if (!dealAmountRaw || !dealYear || !dealMonth) {
+      continue;
+    }
+
+    const dealAmount = Number(dealAmountRaw.replace(/[^\d]/g, ''));
+    if (!dealAmount) {
+      continue;
+    }
+
+    items.push({
+      dealAmount,
+      dealYear,
+      dealMonth,
+      dealDay,
+      exclusiveArea: Number(areaValue.toFixed(2)),
+      floor: Number(extractTagValue(rawItem, 'floor') || 0),
+      buildYear: Number(extractTagValue(rawItem, 'buildYear') || 0),
+      apartmentName: extractTagValue(rawItem, 'aptNm') || '정보 없음',
+    });
+  }
+
+  return items;
+}
+
+function extractTagValue(source: string, tag: string): string | undefined {
+  const regex = new RegExp(`<${tag}>([\\s\\S]*?)<\\/${tag}>`);
+  const match = source.match(regex);
+  return match ? match[1].trim() : undefined;
+}
+
+function normalizeHangul(value?: string): string | undefined {
+  if (!value) {
+    return undefined;
+  }
+
+  return value.replace(/\s+/g, '').trim();
+}
+
+function isDongSimilar(expected?: string, actual?: string): boolean {
+  if (!expected || !actual) {
+    return true;
+  }
+
+  if (expected === actual) {
+    return true;
+  }
+
+  return actual.startsWith(expected) || expected.startsWith(actual);
+}
+
+/**
+ * 개발 계획 정보 조회 (국토부 OpenAPI + 모의 데이터 폴백)
+ */
+//async function getDevelopmentPlans(district: string, regionInfo?: RegionInfo): Promise<string[]> {
+
+//}
+
+
+
+function ensureJson(payload: unknown): any | undefined {
+  if (!payload) {
+    return undefined;
+  }
+  if (typeof payload === 'string') {
+    try {
+      return JSON.parse(payload);
+    } catch (error) {
+      console.error('도시계획 JSON 파싱 오류:', error);
+      return undefined;
+    }
+  }
+
+  return payload;
+}
+
+const PLAN_ITEM_KEY_CANDIDATES = [
+  'planSeCodeNm',
+  'prposAreaDstrcCodeNm',
+  'prposDstrcCodeNm',
+  'useDistrictNm',
+  'ctyPlanFacilityNm',
+  'planNm',
+  'plnDc',
+  'ctyPlanNm',
+];
+
+function collectPlanItems(value: any): Record<string, any>[] {
+  if (!value) {
+    return [];
+  }
+
+  if (Array.isArray(value)) {
+    return value.flatMap((entry) => collectPlanItems(entry));
+  }
+
+  if (typeof value === 'object') {
+    if (isPlanItem(value)) {
+      return [value as Record<string, any>];
+    }
+
+    return Object.values(value).flatMap((entry) => collectPlanItems(entry));
+  }
+
+  return [];
+}
+
+function isPlanItem(value: any): boolean {
+  if (!value || typeof value !== 'object') {
+    return false;
+  }
+
+  return PLAN_ITEM_KEY_CANDIDATES.some((key) => {
+    const candidate = (value as Record<string, any>)[key];
+    return typeof candidate === 'string' && candidate.trim().length > 0;
+  });
+}
+
+function formatPlanItem(item: Record<string, any>): string | undefined {
+  const kind =
+    item.planSeCodeNm ||
+    item.planSeCodeName ||
+    item.planNm ||
+    item.planClNm ||
+    item.ctyPlanSeNm ||
+    item.ctyPlanSe;
+
+  const name =
+    item.prposAreaDstrcCodeNm ||
+    item.prposDstrcCodeNm ||
+    item.useDistrictNm ||
+    item.ctyPlanFacilityNm ||
+    item.ctyPlanNm ||
+    item.prposAreaNm ||
+    item.planNm;
+
+  const area = item.lawdNm || item.sigunguNm || item.admSectNm || item.regionNm;
+  const period = item.aprvdYmd || item.confmDe || item.prdSe;
+  const summarySource = item.plnDc || item.remark || item.ctyPlanDetail || item.cn;
+  const summary = summarySource ? summarySource.replace(/\s+/g, ' ').trim() : '';
+
+  if (!kind && !name && !summary) {
+    return undefined;
+  }
+
+  const base = `${kind ? `[${kind}] ` : ''}${name || '도시계획'}${area ? ` (${area})` : ''}`.trim();
+  const suffixParts = [period, summary].filter((part) => part && String(part).length > 0);
+  if (suffixParts.length === 0) {
+    return base;
+  }
+
+  return `${base} - ${suffixParts.join(' | ')}`.trim();
 }

@@ -14,27 +14,37 @@ export async function analyzeWithOpenAI(
   });
 
   const prompt = createAnalysisPrompt(property, locationInfo);
+  console.log(prompt);
 
   try {
-    const completion = await openai.chat.completions.create({
-      model: 'gpt-4o',
-      messages: [
-        {
-          role: 'system',
-          content: `당신은 대한민국의 전문 부동산 감정평가사입니다.
+//     const completion = await openai.chat.completions.create({
+//       model: 'gpt-5',
+//       messages: [
+//         {
+//           role: 'system',
+//           content: `당신은 대한민국의 전문 부동산 감정평가사입니다.
+// 부동산의 입지, 주변 환경, 개발 계획 등을 종합적으로 분석하여 정확한 감정가를 산정합니다.
+// 반드시 JSON 형식으로만 응답해주세요.`,
+//         },
+//         {
+//           role: 'user',
+//           content: prompt,
+//         },
+//       ],
+//       response_format: { type: 'json_object' },
+//     });
+
+// don't touch this.
+    const completion = await openai.responses.create({
+      model: "gpt-5.1",
+      reasoning: { effort: "low" },
+      instructions: `당신은 대한민국의 전문 부동산 감정평가사입니다.
 부동산의 입지, 주변 환경, 개발 계획 등을 종합적으로 분석하여 정확한 감정가를 산정합니다.
 반드시 JSON 형식으로만 응답해주세요.`,
-        },
-        {
-          role: 'user',
-          content: prompt,
-        },
-      ],
-      response_format: { type: 'json_object' },
-      temperature: 0.7,
+      input: prompt
     });
 
-    const result = JSON.parse(completion.choices[0].message.content || '{}');
+    const result = JSON.parse(completion.output_text || '{}');
 
     return {
       estimatedPrice: result.estimatedPrice,
@@ -68,7 +78,7 @@ export async function analyzeWithClaude(
 
   try {
     const message = await anthropic.messages.create({
-      model: 'claude-3-5-sonnet-20241022',
+      model: 'claude-4-5-sonnet',
       max_tokens: 4096,
       messages: [
         {
@@ -113,7 +123,7 @@ function createAnalysisPrompt(property: PropertyInput, locationInfo: LocationInf
   // 실거래가 정보 포맷팅
   const transactionsInfo = locationInfo.realEstateTransactions && locationInfo.realEstateTransactions.length > 0
     ? locationInfo.realEstateTransactions.map(t =>
-        `- ${t.apartmentName}: ${t.dealAmount}만원 (${t.exclusiveArea}㎡, ${t.floor}층, ${t.dealYear}년 ${t.dealMonth}월)`
+        `- ${t.apartmentName}: ${t.dealAmount}만원 (${t.exclusiveArea}㎡, ${t.floor}층, ${t.dealYear}년 ${t.dealMonth}월, 건축년도:${t.buildYear})`
       ).join('\n')
     : '실거래가 정보 없음';
 
@@ -124,6 +134,7 @@ function createAnalysisPrompt(property: PropertyInput, locationInfo: LocationInf
 다음 부동산에 대한 종합적인 감정가 평가를 수행해주세요:
 
 ## 부동산 정보
+- 건축년도: ${property.buildYear}
 - 주소: ${property.address}
 - 전용면적: ${property.exclusiveArea.toFixed(2)}㎡ (약 ${property.pyeong?.toFixed(2)}평)
 - 지역: ${locationInfo.district}
