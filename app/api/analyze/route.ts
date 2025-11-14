@@ -8,11 +8,11 @@ export async function POST(request: NextRequest) {
     const body: AnalysisRequest = await request.json();
 
     // 입력 검증
-    if (!body.property || !body.property.address || !body.property.pyeong) {
+    if (!body.property || !body.property.address || !body.property.exclusiveArea) {
       return NextResponse.json(
         {
           success: false,
-          error: '주소와 평형 정보가 필요합니다.',
+          error: '주소와 전용면적 정보가 필요합니다.',
         } as AnalysisResponse,
         { status: 400 }
       );
@@ -20,12 +20,12 @@ export async function POST(request: NextRequest) {
 
     const { property, aiProvider = 'both' } = body;
 
-    // 평형을 제곱미터로 변환
-    property.squareMeters = property.pyeong * 3.3058;
+    // 제곱미터를 평으로 변환
+    property.pyeong = property.exclusiveArea / 3.3058;
 
     // 1. 입지 정보 수집
     console.log('입지 정보 수집 중...');
-    const locationInfo = await getLocationInfo(property.address);
+    const locationInfo = await getLocationInfo(property.address, property.exclusiveArea);
 
     // 2. AI 분석 수행
     console.log(`AI 분석 중 (제공자: ${aiProvider})...`);

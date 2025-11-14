@@ -9,7 +9,7 @@ interface PropertyInputFormProps {
 
 export default function PropertyInputForm({ onAnalysisComplete }: PropertyInputFormProps) {
   const [address, setAddress] = useState('');
-  const [pyeong, setPyeong] = useState('');
+  const [exclusiveArea, setExclusiveArea] = useState('');
   const [aiProvider, setAiProvider] = useState<'openai' | 'claude' | 'both'>('both');
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState('');
@@ -22,8 +22,8 @@ export default function PropertyInputForm({ onAnalysisComplete }: PropertyInputF
     try {
       const propertyData: PropertyInput = {
         address,
-        pyeong: parseFloat(pyeong),
-        squareMeters: parseFloat(pyeong) * 3.3058, // 평을 제곱미터로 변환
+        exclusiveArea: parseFloat(exclusiveArea),
+        pyeong: parseFloat(exclusiveArea) / 3.3058, // 제곱미터를 평으로 변환
       };
 
       const response = await fetch('/api/analyze', {
@@ -74,23 +74,23 @@ export default function PropertyInputForm({ onAnalysisComplete }: PropertyInputF
         </div>
 
         <div>
-          <label htmlFor="pyeong" className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">
-            평형
+          <label htmlFor="exclusiveArea" className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">
+            전용면적 (㎡)
           </label>
           <input
             type="number"
-            id="pyeong"
-            value={pyeong}
-            onChange={(e) => setPyeong(e.target.value)}
+            id="exclusiveArea"
+            value={exclusiveArea}
+            onChange={(e) => setExclusiveArea(e.target.value)}
             required
-            step="0.1"
+            step="0.01"
             min="0"
-            placeholder="예: 32"
+            placeholder="예: 84.50"
             className="w-full px-4 py-2 border border-gray-300 dark:border-gray-600 rounded-md focus:ring-2 focus:ring-blue-500 focus:border-transparent dark:bg-gray-700 dark:text-gray-100"
           />
-          {pyeong && (
+          {exclusiveArea && (
             <p className="mt-1 text-sm text-gray-500 dark:text-gray-400">
-              약 {(parseFloat(pyeong) * 3.3058).toFixed(2)}㎡
+              약 {(parseFloat(exclusiveArea) / 3.3058).toFixed(2)}평
             </p>
           )}
         </div>

@@ -56,28 +56,28 @@ function SingleValuationDisplay({
         </div>
       </div>
 
-      {/* 평당 가격 */}
+      {/* ㎡당 가격 */}
       <div className="mb-6 p-4 bg-gray-50 dark:bg-gray-700 rounded-lg">
         <h4 className="text-lg font-semibold mb-3 text-gray-800 dark:text-gray-100">
-          평당 가격
+          ㎡당 가격
         </h4>
         <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
           <div>
             <p className="text-sm text-gray-600 dark:text-gray-400">최소</p>
             <p className="text-lg font-semibold text-gray-800 dark:text-gray-100">
-              {formatPrice(valuation.pricePerPyeong.min)}
+              {formatPrice(valuation.pricePerSquareMeter.min)}
             </p>
           </div>
           <div>
             <p className="text-sm text-gray-600 dark:text-gray-400">평균</p>
             <p className="text-lg font-semibold text-green-600 dark:text-green-400">
-              {formatPrice(valuation.pricePerPyeong.average)}
+              {formatPrice(valuation.pricePerSquareMeter.average)}
             </p>
           </div>
           <div>
             <p className="text-sm text-gray-600 dark:text-gray-400">최대</p>
             <p className="text-lg font-semibold text-gray-800 dark:text-gray-100">
-              {formatPrice(valuation.pricePerPyeong.max)}
+              {formatPrice(valuation.pricePerSquareMeter.max)}
             </p>
           </div>
         </div>
@@ -207,8 +207,8 @@ export default function ValuationResultDisplay({ result }: ValuationResultProps)
             <span className="font-semibold">주소:</span> {property.address}
           </p>
           <p className="text-gray-700 dark:text-gray-300">
-            <span className="font-semibold">평형:</span> {property.pyeong}평
-            ({property.squareMeters?.toFixed(2)}㎡)
+            <span className="font-semibold">전용면적:</span> {property.exclusiveArea.toFixed(2)}㎡
+            ({property.pyeong?.toFixed(2)}평)
           </p>
           {locationInfo.district && (
             <p className="text-gray-700 dark:text-gray-300">
