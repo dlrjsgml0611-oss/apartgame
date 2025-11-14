@@ -5,6 +5,7 @@ import {
   RealEstateTransaction,
   ValuationResult as ValuationResultType,
 } from '@/types';
+import KakaoMap from './KakaoMap';
 
 interface ValuationResultProps {
   result: AnalysisResponse;
@@ -227,6 +228,7 @@ export default function ValuationResultDisplay({ result }: ValuationResultProps)
           <div className="flex gap-3">
             <DetailChip label="전용면적" value={`${property.exclusiveArea.toFixed(1)}㎡`} />
             <DetailChip label="평형" value={`${(property.pyeong ?? property.exclusiveArea / 3.3058).toFixed(1)}평`} />
+            <DetailChip label="건축년도" value={`${property.buildYear}년`} />
           </div>
         </div>
         {facilityCounts.length > 0 && (
@@ -241,6 +243,11 @@ export default function ValuationResultDisplay({ result }: ValuationResultProps)
             ))}
           </div>
         )}
+      </section>
+
+      <section className="rounded-3xl border border-slate-200/80 bg-white/90 p-6 shadow-2xl shadow-black/10 dark:border-slate-700 dark:bg-slate-900/80">
+        <h3 className="mb-4 text-lg font-semibold text-slate-800 dark:text-slate-100">위치 정보</h3>
+        <KakaoMap address={property.address} className="h-[400px] w-full rounded-2xl overflow-hidden shadow-lg" />
       </section>
 
       <section className="grid gap-6 lg:grid-cols-2">

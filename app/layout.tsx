@@ -1,4 +1,5 @@
 import type { Metadata } from "next";
+import KakaoMapScript from "@/components/KakaoMapScript";
 import "./globals.css";
 
 export const metadata: Metadata = {
@@ -14,6 +15,7 @@ export default function RootLayout({
   return (
     <html lang="ko">
       <body className="antialiased">
+        <KakaoMapScript />
         {children}
       </body>
     </html>
