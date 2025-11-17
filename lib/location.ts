@@ -248,7 +248,7 @@ async function getRealEstateTransactions(
 
     for (const dealYmd of recentDealMonths) {
       try {
-        const response = await axios.get(`${PUBLIC_DATA_API_BASE}/getRTMSDataSvcAptTrade`, {
+        const response = await axios.get(`${PUBLIC_DATA_API_BASE}/getRTMSDataSvcAptTrade?type=json`, {
           params: {
             type: 'json',
             serviceKey: PUBLIC_DATA_API_KEY,
